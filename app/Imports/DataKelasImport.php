@@ -33,7 +33,7 @@ class DataKelasImport implements ToModel, WithHeadingRow, WithValidation
     public function rules(): array
     {
         return [
-            'nim' => 'required',
+            'nim' => 'required|unique:data_kelas,nim',
             'nama' => 'required',
             'kelas' => 'required',
             'angkatan' => 'required',

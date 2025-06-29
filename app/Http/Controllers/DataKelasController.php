@@ -10,6 +10,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
 use Maatwebsite\Excel\Facades\Excel;
 use TCPDF;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Maatwebsite\Excel\Validators\ValidationException;
+use Illuminate\Support\Facades\Log;
 
 class DataKelasController extends Controller
 {
@@ -43,7 +46,7 @@ class DataKelasController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $request->validate([
-            'nim' => 'required|string|max:255',
+            'nim' => 'required|string|max:255|unique:data_kelas,nim',
             'nama' => 'required|string|max:255',
             'kelas' => 'required|string|max:255',
             'angkatan' => 'required|string|max:255',
@@ -138,60 +141,93 @@ class DataKelasController extends Controller
             'file' => 'required|mimes:xls,xlsx',
         ]);
 
-        Excel::import(new DataKelasImport, $request->file('file')->store('temp'));
+        Log::info('Memulai proses import file Excel.', ['filename' => $request->file('file')->getClientOriginalName()]);
 
-        return back()->with('success', 'DataKelas imported successfully.');
+        try {
+            Excel::import(new DataKelasImport, $request->file('file'));
+            Log::info('Proses import file Excel berhasil tanpa error.');
+            return redirect()->route('datakelas4b.index')->with('success', 'Data mahasiswa berhasil diimpor!');
+
+        } catch (ValidationException $e) {
+            // Log detail error untuk developer
+            Log::error('Terjadi ValidationException saat import.', [
+                'failures' => $e->failures()
+            ]);
+
+            // FIX: Berikan pesan error yang singkat kepada pengguna
+            return back()->with('error', 'Pastikan format dan isi file sudah benar.');
+
+        } catch (\Exception $e) {
+            // Log detail error untuk developer
+            Log::critical('Terjadi Exception umum saat import.', [
+                'error_message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // FIX: Berikan pesan error yang singkat kepada pengguna
+            return back()->with('error', 'Gagal mengimpor data karena terjadi kesalahan pada sistem.');
+        }
     }
+
     /**
      * Generate a PDF of the data.
      *
-     * @return \Illuminate\Http\Response
+     * @return StreamedResponse
      */
-    public function printpdf()
+    public function printpdf(): StreamedResponse
     {
-        $data_kelas = DataKelas::all();
-
-        $pdf = new TCPDF();
+        $data_kelas = DataKelas::orderBy('nama', 'ASC')->get();
+        $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
         $pdf->SetCreator(PDF_CREATOR);
         $pdf->SetAuthor('Muhammad Rizki Awaluddin Mubin');
-        $pdf->SetTitle('Data Kelas TI 4B');
-        $pdf->SetSubject('Data Kelas TI 4B');
-        $pdf->SetKeywords('TCPDF, PDF, example, test, guide');
-
+        $pdf->SetTitle('Laporan Data Kelas TI 4B');
+        $pdf->SetSubject('Data Mahasiswa');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-
+        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetAutoPageBreak(TRUE, 10);
         $pdf->AddPage();
-
-        $pdf->SetFont('helvetica', 'B', 25);
-        $pdf->Cell(0, 10, 'Data Kelas TI 4B', 0, 1, 'C');
-
-        $pdf->SetFont('helvetica', '', 8);
-        $pdf->Cell(0, 8, 'Jumlah Mahasiswa: ' . count($data_kelas), 0, 1, 'L');
-
-        $pdf->SetFont('helvetica', 'B', 8);
-        $pdf->Cell(8, 10, 'No', 1, 0, 'C');
-        $pdf->Cell(20, 10, 'NIM', 1, 0, 'C');
-        $pdf->Cell(84, 10, 'Nama', 1, 0, 'C');
-        $pdf->Cell(15, 10, 'Kelas', 1, 0, 'C');
-        $pdf->Cell(18, 10, 'Angkatan', 1, 0, 'C');
-        $pdf->Cell(45, 10, 'Jurusan', 1, 1, 'C');
-
-        $pdf->SetFont('helvetica', '', 8);
+        $pdf->SetFont('helvetica', 'B', 16);
+        $pdf->Cell(0, 10, 'Laporan Data Mahasiswa TI 4B', 0, 1, 'C');
+        $pdf->SetFont('helvetica', '', 10);
+        $pdf->Cell(0, 8, 'Jumlah Mahasiswa: ' . $data_kelas->count(), 0, 1, 'L');
+        $pdf->Ln(5);
+        $drawHeader = function ($pdf) {
+            $pdf->SetFont('helvetica', 'B', 9);
+            $pdf->SetFillColor(230, 230, 230);
+            $pdf->SetTextColor(0);
+            $pdf->SetDrawColor(128, 128, 128);
+            $w = [10, 25, 65, 15, 20, 55];
+            $pdf->Cell($w[0], 8, 'No', 1, 0, 'C', 1);
+            $pdf->Cell($w[1], 8, 'NIM', 1, 0, 'C', 1);
+            $pdf->Cell($w[2], 8, 'Nama', 1, 0, 'C', 1);
+            $pdf->Cell($w[3], 8, 'Kelas', 1, 0, 'C', 1);
+            $pdf->Cell($w[4], 8, 'Angkatan', 1, 0, 'C', 1);
+            $pdf->Cell($w[5], 8, 'Jurusan', 1, 1, 'C', 1);
+        };
+        $drawHeader($pdf);
+        $pdf->SetFont('helvetica', '', 9);
+        $pdf->SetFillColor(255);
         $no = 1;
         foreach ($data_kelas as $isi) {
-            $pdf->setCellPadding(3);
-            $pdf->Cell(8, 10, $no, 1, 0, 'C');
-            $pdf->Cell(20, 10, $isi->nim, 1, 0, 'C');
-            $pdf->MultiCell(84, 10, $isi->nama, 1, 'L', 0, 0, '', '', true);
-            $pdf->Cell(15, 10, $isi->kelas, 1, 0, 'C');
-            $pdf->Cell(18, 10, $isi->angkatan, 1, 0, 'C');
-            $pdf->Cell(45, 10, $isi->jurusan, 1, 1, 'C');
+            $w = [10, 25, 65, 15, 20, 55];
+            $rowHeight = $pdf->getStringHeight($w[2], $isi->nama);
+            if ($pdf->GetY() + $rowHeight > ($pdf->getPageHeight() - $pdf->getBreakMargin())) {
+                $pdf->AddPage();
+                $drawHeader($pdf);
+                $pdf->SetFont('helvetica', '', 9);
+            }
+            $pdf->setCellPaddings(2, 2, 2, 2);
+            $pdf->MultiCell($w[0], $rowHeight, $no, 1, 'C', 1, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+            $pdf->MultiCell($w[1], $rowHeight, $isi->nim, 1, 'C', 1, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+            $pdf->MultiCell($w[2], $rowHeight, $isi->nama, 1, 'L', 1, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+            $pdf->MultiCell($w[3], $rowHeight, $isi->kelas, 1, 'C', 1, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+            $pdf->MultiCell($w[4], $rowHeight, $isi->angkatan, 1, 'C', 1, 0, '', '', true, 0, false, true, $rowHeight, 'M');
+            $pdf->MultiCell($w[5], $rowHeight, $isi->jurusan, 1, 'L', 1, 1, '', '', true, 0, false, true, $rowHeight, 'M');
             $no++;
         }
-
-        return response()->streamDownload(function() use ($pdf) {
-            $pdf->Output('datakelas.pdf', 'I');
-        }, 'datakelas.pdf');
+        return response()->streamDownload(function () use ($pdf) {
+            $pdf->Output('Laporan_Data_Kelas.pdf', 'I');
+        }, 'Laporan_Data_Kelas.pdf');
     }
 }
